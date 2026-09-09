@@ -2,6 +2,7 @@
   "name": "swift-logistics",
   "version": "1.0.0",
   "private": true,
+  "main": "index.js",
   "description": "Swift Logistics carrier-service MVP",
   "scripts": {
     "build": "node -e \"console.log('Swift Logistics serverless build ready')\"",

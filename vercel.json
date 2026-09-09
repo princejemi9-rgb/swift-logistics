@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "index.js": {
+      "includeFiles": ["index.html"]
+    }
+  },
   "rewrites": [
     { "source": "/ship", "destination": "/ship.html" },
     { "source": "/rates", "destination": "/rates.html" },
