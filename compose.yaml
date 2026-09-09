@@ -1,0 +1,15 @@
+services:
+  swift-logistics:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_DIR: /var/lib/swift-logistics
+    volumes:
+      - swift-logistics-data:/var/lib/swift-logistics
+    restart: unless-stopped
+
+volumes:
+  swift-logistics-data:
