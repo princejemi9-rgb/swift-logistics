@@ -10,7 +10,7 @@ Requires Node.js 24 or later (the project uses Node's built-in SQLite module).
 node server.js
 ```
 
-Open `http://localhost:3000`. If PowerShell blocks `npm`, run the Node command directly.
+Open `http://localhost:3000`. If PowerShell blocks `npm`, run the Node command directly. `npm run local` is also available where npm scripts are enabled.
 
 ## Verify the service
 
