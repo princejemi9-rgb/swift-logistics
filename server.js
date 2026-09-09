@@ -11,6 +11,7 @@ const db = new DatabaseSync(path.join(dataDirectory, 'swift-logistics.db'));
 const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, '');
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 const supabaseEnabled = Boolean(supabaseUrl && supabaseAnonKey);
+const cleanPages = new Set(['index','ship','rates','track','history','support','contact','login','register','admin','privacy','terms']);
 const types = { '.css':'text/css; charset=utf-8', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.json':'application/json; charset=utf-8' };
 db.exec(`PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'customer', created_at TEXT NOT NULL);
@@ -62,7 +63,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method==='POST' && url.pathname==='/api/support-tickets') { const b=await body(req); if(['name','email','topic','message'].some(k=>!text(b[k]))) return json(res,422,{error:'Complete your name, email, topic, and message.'}); const id=supportId(); db.prepare('INSERT INTO support_tickets VALUES (?,?,?,?,?,?,?,?)').run(id,user?.id||null,clean(b.name),clean(b.email),clean(b.topic),clean(b.message),'Open',new Date().toISOString()); return json(res,201,{id,status:'Open'}); }
     if (req.method==='GET' && url.pathname==='/api/support-tickets') { if(user?.role!=='staff') return json(res,403,{error:'Staff access is required.'}); return json(res,200,db.prepare('SELECT id, name, email, topic, message, status, created_at AS createdAt FROM support_tickets ORDER BY created_at DESC').all()); }
     if (req.method==='PUT' && /^\/api\/support-tickets\/[^/]+$/.test(url.pathname)) { if(user?.role!=='staff') return json(res,403,{error:'Staff access is required.'}); const b=await body(req), id=decodeURIComponent(url.pathname.split('/').pop()).toUpperCase(); if(!['Open','In progress','Resolved'].includes(b.status)) return json(res,422,{error:'Select a valid ticket status.'}); const update=db.prepare('UPDATE support_tickets SET status=? WHERE id=?').run(b.status,id); return update.changes?json(res,200,{id,status:b.status}):json(res,404,{error:'Support ticket not found.'}); }
-    if (req.method!=='GET'&&req.method!=='HEAD') return json(res,404,{error:'Route not found.'}); const relative=path.normalize(url.pathname==='/'?'index.html':url.pathname.replace(/^\//,'')); const file=path.join(root,relative); if(!file.startsWith(root)||!existsSync(file)) return json(res,404,{error:'Not found.'}); const content=await readFile(file); res.writeHead(200,{...securityHeaders,...(production?{'Strict-Transport-Security':'max-age=31536000; includeSubDomains'}:{}),'Content-Type':types[path.extname(file)]||'application/octet-stream'}); res.end(req.method==='HEAD'?undefined:content);
+    if (req.method!=='GET'&&req.method!=='HEAD') return json(res,404,{error:'Route not found.'});
+    const requested = url.pathname.replace(/^\//, ''); const oldPage = requested.endsWith('.html') ? requested.slice(0, -5) : null;
+    if (oldPage && cleanPages.has(oldPage)) { res.writeHead(308, { Location: oldPage === 'index' ? '/' : `/${oldPage}` }); return res.end(); }
+    const relative = path.normalize(url.pathname === '/' ? 'index.html' : (!path.extname(requested) && cleanPages.has(requested) ? `${requested}.html` : requested)); const file=path.join(root,relative);
+    if(!file.startsWith(root)||!existsSync(file)) return json(res,404,{error:'Not found.'}); const content=await readFile(file); res.writeHead(200,{...securityHeaders,...(production?{'Strict-Transport-Security':'max-age=31536000; includeSubDomains'}:{}),'Content-Type':types[path.extname(file)]||'application/octet-stream'}); res.end(req.method==='HEAD'?undefined:content);
   } catch(error) { console.error(error); json(res,error.message==='Request body too large'?413:400,{error:error.message||'Unable to process request.'}); }
 });
 server.listen(port,()=>console.log(`Swift Logistics is running at http://localhost:${port}`));
