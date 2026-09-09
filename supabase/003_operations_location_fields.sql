@@ -5,6 +5,7 @@ alter table public.shipments add column if not exists current_city text;
 alter table public.shipments add column if not exists progress integer not null default 0 check (progress between 0 and 100);
 alter table public.shipments add column if not exists expected_delivery date;
 
+drop function if exists public.track_shipment(text);
 create or replace function public.track_shipment(tracking_number text)
 returns table (id text, origin text, destination text, service text, status text, current_country text, current_state text, current_city text, progress integer, expected_delivery date, created_at timestamptz, events jsonb)
 language sql security definer set search_path = public as $$
