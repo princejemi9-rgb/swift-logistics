@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const { once } = require('node:events');
 const { mkdtemp, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
@@ -36,4 +37,4 @@ async function waitForServer() {
   result = await api('/api/support-tickets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Test Customer', email, topic: 'Tracking issue', message: 'Please check my package.' }) });
   assert.equal(result.response.status, 201);
   console.log('Smoke test passed: authentication, shipments, tracking, history, and support.');
-})().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => { server?.kill(); if (dataDirectory) await rm(dataDirectory, { recursive: true, force: true }); });
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => { if (server && server.exitCode === null) { server.kill(); await once(server, 'exit'); } if (dataDirectory) await rm(dataDirectory, { recursive: true, force: true }); });
