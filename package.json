@@ -4,6 +4,7 @@
   "private": true,
   "description": "Swift Logistics carrier-service MVP",
   "scripts": {
+    "build": "node -e \"console.log('Swift Logistics serverless build ready')\"",
     "local": "node server.js",
     "dev": "node --watch server.js",
     "test": "node tests/smoke-test.js"
