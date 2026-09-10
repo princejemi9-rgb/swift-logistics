@@ -1,7 +1,7 @@
 const { randomUUID } = require('node:crypto');
 
-const url = process.env.SUPABASE_URL?.replace(/\/$/, '');
-const key = process.env.SUPABASE_ANON_KEY;
+const url = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL)?.replace(/\/$/, '');
+const key = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const cookieName = 'swift_session';
 const send = (res, status, body, headers = {}) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.setHeader('Cache-Control', 'no-store'); Object.entries(headers).forEach(([name, value]) => res.setHeader(name, value)); res.end(JSON.stringify(body)); };
 const read = req => new Promise((resolve, reject) => { let value=''; req.on('data', chunk => { value += chunk; if(value.length>100000) reject(new Error('Request body too large')); }); req.on('end', () => { try { resolve(value ? JSON.parse(value) : {}); } catch { reject(new Error('Send valid JSON.')); } }); });
