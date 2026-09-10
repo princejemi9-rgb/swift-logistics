@@ -11,7 +11,7 @@ const db = new DatabaseSync(path.join(dataDirectory, 'swift-logistics.db'));
 const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, '');
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 const supabaseEnabled = Boolean(supabaseUrl && supabaseAnonKey);
-const cleanPages = new Set(['index','ship','rates','track','history','support','contact','login','register','admin','privacy','terms']);
+const cleanPages = new Set(['index','ship','rates','track','history','support','contact','login','register','forgot-password','reset-password','admin','privacy','terms']);
 const types = { '.css':'text/css; charset=utf-8', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.json':'application/json; charset=utf-8' };
 db.exec(`PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'customer', created_at TEXT NOT NULL);
