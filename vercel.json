@@ -3,18 +3,5 @@
     "index.js": {
       "includeFiles": "**/*"
     }
-  },
-  "rewrites": [
-    { "source": "/ship", "destination": "/ship.html" },
-    { "source": "/rates", "destination": "/rates.html" },
-    { "source": "/track", "destination": "/track.html" },
-    { "source": "/history", "destination": "/history.html" },
-    { "source": "/support", "destination": "/support.html" },
-    { "source": "/contact", "destination": "/contact.html" },
-    { "source": "/login", "destination": "/login.html" },
-    { "source": "/register", "destination": "/register.html" },
-    { "source": "/admin", "destination": "/admin.html" },
-    { "source": "/privacy", "destination": "/privacy.html" },
-    { "source": "/terms", "destination": "/terms.html" }
-  ]
+  }
 }
