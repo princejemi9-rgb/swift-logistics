@@ -4,7 +4,7 @@ const path = require('node:path');
 const api = require('./api/index');
 const root = __dirname;
 const pages = new Set(['index', 'ship', 'rates', 'track', 'history', 'support', 'contact', 'login', 'register', 'forgot-password', 'reset-password', 'profile', 'admin', 'privacy', 'terms']);
-const types = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+const types = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png' };
 
 module.exports = async (req, res) => {
   const url = new URL(req.url, 'https://swift-logistics.local');
