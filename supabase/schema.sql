@@ -50,13 +50,28 @@ alter table public.shipments enable row level security;
 alter table public.shipment_events enable row level security;
 alter table public.support_tickets enable row level security;
 
+-- Keeps staff role checks out of profile RLS policies themselves, avoiding
+-- recursive policy evaluation. It exposes only a boolean for the caller.
+create function public.is_staff()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and role = 'staff');
+$$;
+revoke all on function public.is_staff() from public, anon;
+grant execute on function public.is_staff() to authenticated;
+
 create policy "users read own profile" on public.profiles for select using (auth.uid() = id);
+create policy "staff read profiles" on public.profiles for select using (public.is_staff());
 create policy "users read own shipments" on public.shipments for select using (owner_id = auth.uid());
 create policy "users create own shipments" on public.shipments for insert with check (owner_id = auth.uid());
 create policy "users read events for own shipments" on public.shipment_events for select using (exists (select 1 from public.shipments s where s.id = shipment_id and s.owner_id = auth.uid()));
 create policy "users create tickets" on public.support_tickets for insert with check (user_id is null or user_id = auth.uid());
 
 -- Add staff policies only after assigning role='staff' to trusted profiles.
-create policy "staff manage shipments" on public.shipments for all using ((select role from public.profiles where id = auth.uid()) = 'staff');
-create policy "staff manage events" on public.shipment_events for all using ((select role from public.profiles where id = auth.uid()) = 'staff');
-create policy "staff manage tickets" on public.support_tickets for all using ((select role from public.profiles where id = auth.uid()) = 'staff');
+create policy "staff manage shipments" on public.shipments for all using (public.is_staff());
+create policy "staff manage events" on public.shipment_events for all using (public.is_staff());
+create policy "staff manage tickets" on public.support_tickets for all using (public.is_staff());

@@ -10,5 +10,10 @@
     "dev": "node --watch server.js",
     "test": "node tests/smoke-test.js"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
 }

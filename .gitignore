@@ -2,3 +2,7 @@ data/*
 !data/.gitkeep
 .env
 node_modules/
+
+.vercel
+.env*
+!.env.example

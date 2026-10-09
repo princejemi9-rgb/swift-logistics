@@ -1,6 +1,6 @@
+const {validKey,normalizeBooking,normalizeAdminBooking} = require('./booking');
 const http = require('node:http');
-const { readFile } = require('node:fs/promises');
-const { existsSync } = require('node:fs');
+const { requestPath, servePublic, notFound } = require('./public-files');
 const path = require('node:path');
 const { randomUUID, scryptSync, timingSafeEqual } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
@@ -11,14 +11,24 @@ const db = new DatabaseSync(path.join(dataDirectory, 'swift-logistics.db'));
 const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, '');
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 const supabaseEnabled = Boolean(supabaseUrl && supabaseAnonKey);
-const cleanPages = new Set(['index','ship','rates','track','history','support','contact','login','register','forgot-password','reset-password','profile','admin','privacy','terms']);
-const types = { '.css':'text/css; charset=utf-8', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.json':'application/json; charset=utf-8', '.png':'image/png' };
-db.exec(`PRAGMA foreign_keys = ON;
+db.exec(`PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'customer', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS shipments (id TEXT PRIMARY KEY, owner_id TEXT REFERENCES users(id), sender_name TEXT NOT NULL, sender_email TEXT NOT NULL, origin TEXT NOT NULL, recipient_name TEXT NOT NULL, recipient_phone TEXT NOT NULL, destination TEXT NOT NULL, contents TEXT NOT NULL, weight REAL NOT NULL, service TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS shipment_events (id INTEGER PRIMARY KEY AUTOINCREMENT, shipment_id TEXT NOT NULL REFERENCES shipments(id) ON DELETE CASCADE, title TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS support_tickets (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), name TEXT NOT NULL, email TEXT NOT NULL, topic TEXT NOT NULL, message TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);`);
+db.exec(`CREATE TABLE IF NOT EXISTS booking_requests (
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL, request_payload TEXT NOT NULL,
+  shipment_id TEXT REFERENCES shipments(id) ON DELETE SET NULL,
+  PRIMARY KEY (owner_id,idempotency_key)
+);`);
+db.exec(`CREATE TABLE IF NOT EXISTS admin_booking_requests (
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL, request_payload TEXT NOT NULL,
+  shipment_id TEXT REFERENCES shipments(id) ON DELETE SET NULL,
+  PRIMARY KEY (created_by,idempotency_key)
+);`);
 function ensureShipmentColumn(name, definition) { if (!db.prepare('PRAGMA table_info(shipments)').all().some(column => column.name === name)) db.exec(`ALTER TABLE shipments ADD COLUMN ${name} ${definition}`); }
 ensureShipmentColumn('current_country', 'TEXT');
 ensureShipmentColumn('current_state', 'TEXT');
@@ -48,7 +58,8 @@ const requests = new Map();
 function allowed(req) { const key = req.socket.remoteAddress || 'unknown', now = Date.now(), windowMs = 15 * 60 * 1000; const active = (requests.get(key) || []).filter(time => time > now - windowMs); active.push(now); requests.set(key, active); return active.length <= 180; }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`), user = currentUser(req);
+  if (requestPath(req.url) === null) return notFound(res, securityHeaders);
+  const url = new URL(req.url, 'http://localhost'), user = currentUser(req);
   try {
     if (!allowed(req)) return json(res,429,{error:'Too many requests. Please try again later.'},{'Retry-After':'900'});
     if (req.method==='GET' && url.pathname==='/api/health') return json(res,200,{status:'ok',database:'sqlite'});
@@ -56,18 +67,83 @@ const server = http.createServer(async (req, res) => {
     if (req.method==='POST' && url.pathname==='/api/auth/register') { const b=await body(req); if (!text(b.name)||!/^\S+@\S+\.\S+$/.test(clean(b.email))||String(b.password||'').length<8) return json(res,422,{error:'Enter your name, a valid email, and a password of at least 8 characters.'}); const id=randomUUID(), token=randomUUID(), now=new Date().toISOString(); try { db.prepare('INSERT INTO users VALUES (?,?,?,?,?,?)').run(id,clean(b.name),clean(b.email).toLowerCase(),hash(b.password),'customer',now); db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(token,id,new Date(Date.now()+604800000).toISOString()); return json(res,201,{user:{id,name:clean(b.name),email:clean(b.email).toLowerCase(),role:'customer'}},{'Set-Cookie':`swift_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`}); } catch { return json(res,409,{error:'An account with that email already exists.'}); } }
     if (req.method==='POST' && url.pathname==='/api/auth/login') { const b=await body(req), account=db.prepare('SELECT * FROM users WHERE email=?').get(clean(b.email).toLowerCase()); if (!account || !matches(String(b.password||''),account.password_hash)) return json(res,401,{error:'Email or password is incorrect.'}); const token=randomUUID(); db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(token,account.id,new Date(Date.now()+604800000).toISOString()); return json(res,200,{user:{id:account.id,name:account.name,email:account.email,role:account.role}},{'Set-Cookie':`swift_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`}); }
     if (req.method==='POST' && url.pathname==='/api/auth/logout') { const token=(req.headers.cookie||'').split(';').map(v=>v.trim()).find(v=>v.startsWith('swift_session='))?.slice(14); if(token) db.prepare('DELETE FROM sessions WHERE token=?').run(token); return json(res,200,{ok:true},{'Set-Cookie':'swift_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'}); }
+    if (req.method==='GET' && url.pathname==='/api/customers') { if(user?.role!=='staff') return json(res,403,{error:'Staff access is required.'}); const rows=db.prepare(`SELECT u.id,u.name,u.email,u.created_at AS createdAt,COUNT(s.id) AS shipmentCount FROM users u LEFT JOIN shipments s ON s.owner_id=u.id WHERE u.role='customer' GROUP BY u.id ORDER BY u.created_at DESC`).all(); return json(res,200,rows); }
     if (req.method==='GET' && url.pathname==='/api/shipments') { if(!user) return json(res,401,{error:'Sign in to view your shipment history.'}); const rows=user.role==='staff'?db.prepare('SELECT * FROM shipments ORDER BY created_at DESC').all():db.prepare('SELECT * FROM shipments WHERE owner_id=? ORDER BY created_at DESC').all(user.id); return json(res,200,rows.map(row=>safeShipment(shipment(row)))); }
     if (req.method==='GET' && url.pathname.startsWith('/api/shipments/')) { const id=decodeURIComponent(url.pathname.split('/').pop()).toUpperCase(); const record=supabaseEnabled ? await publicSupabaseTracking(id) : safeShipment(shipment(db.prepare('SELECT * FROM shipments WHERE id=?').get(id))); return record?json(res,200,record):json(res,404,{error:'Shipment not found.'}); }
-    if (req.method==='POST' && url.pathname==='/api/shipments') { const b=await body(req), required=['senderName','senderEmail','origin','recipientName','recipientPhone','destination','contents','weight','service']; if(required.some(k=>!text(String(b[k]??'')))||Number(b.weight)<=0) return json(res,422,{error:'Complete all shipment fields with a valid weight.'}); const id=tracking(), now=new Date().toISOString(); db.prepare('INSERT INTO shipments (id,owner_id,sender_name,sender_email,origin,recipient_name,recipient_phone,destination,contents,weight,service,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,user?.id||null,clean(b.senderName),clean(b.senderEmail),clean(b.origin),clean(b.recipientName),clean(b.recipientPhone),clean(b.destination),clean(b.contents),Number(b.weight),clean(b.service),'Shipment created',now); db.prepare('INSERT INTO shipment_events (shipment_id,title,detail,created_at) VALUES (?,?,?,?)').run(id,'Shipment created',`Collection scheduled in ${clean(b.origin)}`,now); return json(res,201,safeShipment(shipment(db.prepare('SELECT * FROM shipments WHERE id=?').get(id)))); }
+    if (req.method==='POST' && url.pathname==='/api/shipments') {
+      if(!user) return json(res,401,{error:'Sign in to create a shipment.'});
+      const bookingKey=req.headers['idempotency-key'];
+      if(!validKey(bookingKey)) return json(res,400,{error:'A valid Idempotency-Key UUID header is required.'});
+      const input=normalizeBooking(await body(req));
+      if(!input) return json(res,422,{error:'Complete all shipment fields with a valid weight and service.'});
+      const key=bookingKey.toLowerCase(), fingerprint=JSON.stringify(input);
+      let result, replayed=false, transactionOpen=false;
+      try {
+        db.exec('BEGIN IMMEDIATE');
+        transactionOpen=true;
+        const prior=db.prepare('SELECT request_payload,shipment_id FROM booking_requests WHERE owner_id=? AND idempotency_key=?').get(user.id,key);
+        if(prior) {
+          const row=db.prepare('SELECT * FROM shipments WHERE id=? AND owner_id=?').get(prior.shipment_id,user.id);
+          if(prior.request_payload!==fingerprint || !row) {
+            db.exec('ROLLBACK'); transactionOpen=false; return json(res,409,{error:'This booking key cannot be reused for these shipment details. Check your original booking.'});
+          }
+          result=safeShipment(shipment(row)); replayed=true;
+        } else {
+          const id=tracking(), now=new Date().toISOString();
+          db.prepare('INSERT INTO shipments (id,owner_id,sender_name,sender_email,origin,recipient_name,recipient_phone,destination,contents,weight,service,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,user.id,input.senderName,input.senderEmail,input.origin,input.recipientName,input.recipientPhone,input.destination,input.contents,input.weight,input.service,'Shipment created',now);
+          db.prepare('INSERT INTO shipment_events (shipment_id,title,detail,created_at) VALUES (?,?,?,?)').run(id,'Shipment created','Collection scheduled in '+input.origin,now);
+          db.prepare('INSERT INTO booking_requests (owner_id,idempotency_key,request_payload,shipment_id) VALUES (?,?,?,?)').run(user.id,key,fingerprint,id);
+          result=safeShipment(shipment(db.prepare('SELECT * FROM shipments WHERE id=?').get(id)));
+        }
+        db.exec('COMMIT'); transactionOpen=false;
+      } catch {
+        if(transactionOpen) db.exec('ROLLBACK');
+        return json(res,503,{error:'Booking could not be confirmed. Retry with the same booking key.'});
+      }
+      return json(res,201,result,{'Idempotency-Replayed':String(replayed)});
+    }
+    if (req.method==='POST' && url.pathname==='/api/admin/shipments') {
+      if(user?.role!=='staff') return json(res,403,{error:'Staff access is required.'});
+      const bookingKey=req.headers['idempotency-key'];
+      if(!validKey(bookingKey)) return json(res,400,{error:'A valid Idempotency-Key UUID header is required.'});
+      const request=normalizeAdminBooking(await body(req));
+      if(!request) return json(res,422,{error:'Complete all shipment fields, choose a valid status and progress, and use a valid customer selection.'});
+      if(request.ownerId) {
+        const owner=db.prepare("SELECT id FROM users WHERE id=? AND role='customer'").get(request.ownerId);
+        if(!owner) return json(res,422,{error:'Select an existing customer account, or leave the shipment unassigned.'});
+      }
+      const key=bookingKey.toLowerCase(), fingerprint=JSON.stringify({ownerId:request.ownerId,...request.payload});
+      let result, replayed=false, transactionOpen=false;
+      try {
+        db.exec('BEGIN IMMEDIATE'); transactionOpen=true;
+        const prior=db.prepare('SELECT request_payload,shipment_id FROM admin_booking_requests WHERE created_by=? AND idempotency_key=?').get(user.id,key);
+        if(prior) {
+          const row=db.prepare('SELECT * FROM shipments WHERE id=?').get(prior.shipment_id);
+          if(prior.request_payload!==fingerprint || !row) {
+            db.exec('ROLLBACK'); transactionOpen=false;
+            return json(res,409,{error:'This admin booking key cannot be reused for different shipment details.'});
+          }
+          result=safeShipment(shipment(row)); replayed=true;
+        } else {
+          const id=tracking(), now=new Date().toISOString(), input=request.payload;
+          db.prepare('INSERT INTO shipments (id,owner_id,sender_name,sender_email,origin,recipient_name,recipient_phone,destination,contents,weight,service,status,created_at,progress,expected_delivery) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,request.ownerId,input.senderName,input.senderEmail,input.origin,input.recipientName,input.recipientPhone,input.destination,input.contents,input.weight,input.service,input.initialStatus,now,input.initialProgress,input.expectedDelivery);
+          db.prepare('INSERT INTO shipment_events (shipment_id,title,detail,created_at) VALUES (?,?,?,?)').run(id,input.initialStatus,'Created in the operations console.',now);
+          db.prepare('INSERT INTO admin_booking_requests (created_by,idempotency_key,request_payload,shipment_id) VALUES (?,?,?,?)').run(user.id,key,fingerprint,id);
+          result=safeShipment(shipment(db.prepare('SELECT * FROM shipments WHERE id=?').get(id)));
+        }
+        db.exec('COMMIT'); transactionOpen=false;
+      } catch {
+        if(transactionOpen) db.exec('ROLLBACK');
+        return json(res,503,{error:'The staff shipment could not be confirmed. Retry with the same booking key.'});
+      }
+      return json(res,201,result,{'Idempotency-Replayed':String(replayed)});
+    }
     if (req.method==='PUT' && /^\/api\/shipments\/[^/]+\/status$/.test(url.pathname)) { if(user?.role!=='staff') return json(res,403,{error:'Staff access is required.'}); const b=await body(req), id=decodeURIComponent(url.pathname.split('/')[3]).toUpperCase(), progress=Number(b.progress); if(!text(b.status)||!text(b.detail)||!Number.isInteger(progress)||progress < 0||progress > 100) return json(res,422,{error:'Provide a status, update detail, and progress from 0 to 100.'}); const update=db.prepare('UPDATE shipments SET status=?, current_country=?, current_state=?, current_city=?, progress=?, expected_delivery=? WHERE id=?').run(clean(b.status),clean(b.country),clean(b.state),clean(b.city),progress,clean(b.expectedDelivery)||null,id); if(!update.changes) return json(res,404,{error:'Shipment not found.'}); const place=[clean(b.city),clean(b.state),clean(b.country)].filter(Boolean).join(', '); db.prepare('INSERT INTO shipment_events (shipment_id,title,detail,created_at) VALUES (?,?,?,?)').run(id,clean(b.status),`${clean(b.detail)}${place ? ` — ${place}` : ''}`,new Date().toISOString()); return json(res,200,safeShipment(shipment(db.prepare('SELECT * FROM shipments WHERE id=?').get(id)))); }
     if (req.method==='POST' && url.pathname==='/api/support-tickets') { const b=await body(req); if(['name','email','topic','message'].some(k=>!text(b[k]))) return json(res,422,{error:'Complete your name, email, topic, and message.'}); const id=supportId(); db.prepare('INSERT INTO support_tickets VALUES (?,?,?,?,?,?,?,?)').run(id,user?.id||null,clean(b.name),clean(b.email),clean(b.topic),clean(b.message),'Open',new Date().toISOString()); return json(res,201,{id,status:'Open'}); }
     if (req.method==='GET' && url.pathname==='/api/support-tickets') { if(user?.role!=='staff') return json(res,403,{error:'Staff access is required.'}); return json(res,200,db.prepare('SELECT id, name, email, topic, message, status, created_at AS createdAt FROM support_tickets ORDER BY created_at DESC').all()); }
     if (req.method==='PUT' && /^\/api\/support-tickets\/[^/]+$/.test(url.pathname)) { if(user?.role!=='staff') return json(res,403,{error:'Staff access is required.'}); const b=await body(req), id=decodeURIComponent(url.pathname.split('/').pop()).toUpperCase(); if(!['Open','In progress','Resolved'].includes(b.status)) return json(res,422,{error:'Select a valid ticket status.'}); const update=db.prepare('UPDATE support_tickets SET status=? WHERE id=?').run(b.status,id); return update.changes?json(res,200,{id,status:b.status}):json(res,404,{error:'Support ticket not found.'}); }
     if (req.method!=='GET'&&req.method!=='HEAD') return json(res,404,{error:'Route not found.'});
-    const requested = url.pathname.replace(/^\//, ''); const oldPage = requested.endsWith('.html') ? requested.slice(0, -5) : null;
-    if (oldPage && cleanPages.has(oldPage)) { res.writeHead(308, { Location: oldPage === 'index' ? '/' : `/${oldPage}` }); return res.end(); }
-    const relative = path.normalize(url.pathname === '/' ? 'index.html' : (!path.extname(requested) && cleanPages.has(requested) ? `${requested}.html` : requested)); const file=path.join(root,relative);
-    if(!file.startsWith(root)||!existsSync(file)) return json(res,404,{error:'Not found.'}); const content=await readFile(file); res.writeHead(200,{...securityHeaders,...(production?{'Strict-Transport-Security':'max-age=31536000; includeSubDomains'}:{}),'Content-Type':types[path.extname(file)]||'application/octet-stream'}); res.end(req.method==='HEAD'?undefined:content);
+    return await servePublic(req, res, root, { ...securityHeaders, ...(production ? {'Strict-Transport-Security':'max-age=31536000; includeSubDomains'} : {}) });
   } catch(error) { console.error(error); json(res,error.message==='Request body too large'?413:400,{error:error.message||'Unable to process request.'}); }
 });
 server.listen(port,()=>console.log(`Swift Logistics is running at http://localhost:${port}`));
