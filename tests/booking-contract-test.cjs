@@ -16,7 +16,7 @@ function harness({invalidToken=false,rpcStatus=200,rpcBody={shipment:persisted,r
     if(route==='/rest/v1/shipments')return new Response(JSON.stringify([persisted]));
     if(route==='/rest/v1/shipment_events')return new Response(JSON.stringify([]));
     if(route==='/rest/v1/rpc/book_shipment')return new Response(JSON.stringify(rpcBody),{status:rpcStatus});
-    if(route==='/rest/v1/rpc/track_shipment')return new Response(JSON.stringify([{...persisted,events:[]} ]));
+    if(route==='/rest/v1/rpc/track_shipment')return new Response(JSON.stringify([{...persisted,events:[{title:'Shipment created',detail:'Created in the operations console.',time:'2026-09-30T10:00:00Z'}]} ]));
     throw new Error('Unexpected external request: '+route);
   }};
   vm.runInNewContext(fs.readFileSync(path.join(root,'api/index.js'),'utf8'),context);
@@ -66,6 +66,7 @@ test('malformed successful RPC data is treated as uncertain rather than a bookin
 test('public tracking still uses existing RPC and omits private data',async()=>{
   const h=harness();const result=await h.run({method:'GET',url:'/api/shipments/SWF-1234ABCD',cookie:''});
   assert.equal(result.status,200);assert.equal(result.body.senderEmail,undefined);assert.equal(result.body.senderName,undefined);assert.equal(result.body.contents,undefined);
+  assert.equal(result.body.events[0].detail,'Shipment registered and tracking information generated. Awaiting pickup and initial processing.');
   assert.equal(h.calls[0].route,'/rest/v1/rpc/track_shipment');
 });
 test('existing Supabase staff status writes still use staff token; customer cannot invoke them',async()=>{

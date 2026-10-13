@@ -42,18 +42,20 @@ const json = (res, status, body, extra = {}) => { res.writeHead(status, { ...sec
 const clean = value => String(value ?? '').trim();
 const tracking = () => `SWF-${randomUUID().replaceAll('-','').slice(0,8).toUpperCase()}`;
 const supportId = () => `SUP-${randomUUID().replaceAll('-','').slice(0,8).toUpperCase()}`;
+const operationsCreatedDetail = 'Shipment registered and tracking information generated. Awaiting pickup and initial processing.';
+const displayEvent = event => event?.detail === 'Created in the operations console.' ? { ...event, detail:operationsCreatedDetail } : event;
 const hash = password => { const salt = randomUUID(); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; };
 const matches = (password, stored) => { const [salt, value] = stored.split(':'); const actual = scryptSync(password, salt, 64); return timingSafeEqual(actual, Buffer.from(value, 'hex')); };
 async function body(req) { let data=''; for await (const part of req) { data += part; if (data.length > 100000) throw new Error('Request body too large'); } try { return JSON.parse(data); } catch { throw new Error('Send valid JSON.'); } }
 function currentUser(req) { const token = (req.headers.cookie || '').split(';').map(v=>v.trim()).find(v=>v.startsWith('swift_session='))?.slice(14); if (!token) return null; const row = db.prepare(`SELECT users.id, users.name, users.email, users.role FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token=? AND sessions.expires_at>?`).get(token, new Date().toISOString()); return row || null; }
-function shipment(row) { if (!row) return null; return { id:row.id, ownerId:row.owner_id || null, senderName:row.sender_name, senderEmail:row.sender_email, origin:row.origin, recipientName:row.recipient_name, recipientPhone:row.recipient_phone, destination:row.destination, contents:row.contents, weight:row.weight, service:row.service, status:row.status, currentCountry:row.current_country, currentState:row.current_state, currentCity:row.current_city, progress:row.progress || 0, expectedDelivery:row.expected_delivery, createdAt:row.created_at, events:db.prepare('SELECT title, detail, created_at AS time FROM shipment_events WHERE shipment_id=? ORDER BY id DESC').all(row.id) }; }
+function shipment(row) { if (!row) return null; return { id:row.id, ownerId:row.owner_id || null, senderName:row.sender_name, senderEmail:row.sender_email, origin:row.origin, recipientName:row.recipient_name, recipientPhone:row.recipient_phone, destination:row.destination, contents:row.contents, weight:row.weight, service:row.service, status:row.status, currentCountry:row.current_country, currentState:row.current_state, currentCity:row.current_city, progress:row.progress || 0, expectedDelivery:row.expected_delivery, createdAt:row.created_at, events:db.prepare('SELECT title, detail, created_at AS time FROM shipment_events WHERE shipment_id=? ORDER BY id DESC').all(row.id).map(displayEvent) }; }
 function safeShipment(record) { const { senderEmail, recipientPhone, ...value } = record; return value; }
 function publicShipment(record) { if (!record) return null; const { id, origin, destination, service, status, currentCountry, currentState, currentCity, progress, expectedDelivery, createdAt, events } = record; return { id, origin, destination, service, status, currentCountry, currentState, currentCity, progress, expectedDelivery, createdAt, events }; }
 async function publicSupabaseTracking(id) {
   const response = await fetch(`${supabaseUrl}/rest/v1/rpc/track_shipment`, { method:'POST', headers:{ apikey:supabaseAnonKey, Authorization:`Bearer ${supabaseAnonKey}`, 'Content-Type':'application/json' }, body:JSON.stringify({ tracking_number:id }) });
   if (!response.ok) throw new Error('Supabase tracking lookup failed.');
   const [record] = await response.json();
-  return record ? { id:record.id, origin:record.origin, destination:record.destination, service:record.service, status:record.status, currentCountry:record.current_country, currentState:record.current_state, currentCity:record.current_city, progress:record.progress, expectedDelivery:record.expected_delivery, createdAt:record.created_at, events:record.events || [] } : null;
+  return record ? { id:record.id, origin:record.origin, destination:record.destination, service:record.service, status:record.status, currentCountry:record.current_country, currentState:record.current_state, currentCity:record.current_city, progress:record.progress, expectedDelivery:record.expected_delivery, createdAt:record.created_at, events:(record.events || []).map(displayEvent) } : null;
 }
 const requests = new Map();
 function allowed(req) { const key = req.socket.remoteAddress || 'unknown', now = Date.now(), windowMs = 15 * 60 * 1000; const active = (requests.get(key) || []).filter(time => time > now - windowMs); active.push(now); requests.set(key, active); return active.length <= 180; }
@@ -128,7 +130,7 @@ const server = http.createServer(async (req, res) => {
         } else {
           const id=tracking(), now=new Date().toISOString(), input=request.payload;
           db.prepare('INSERT INTO shipments (id,owner_id,sender_name,sender_email,origin,recipient_name,recipient_phone,destination,contents,weight,service,status,created_at,progress,expected_delivery) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,request.ownerId,input.senderName,input.senderEmail,input.origin,input.recipientName,input.recipientPhone,input.destination,input.contents,input.weight,input.service,input.initialStatus,now,input.initialProgress,input.expectedDelivery);
-          db.prepare('INSERT INTO shipment_events (shipment_id,title,detail,created_at) VALUES (?,?,?,?)').run(id,input.initialStatus,'Created in the operations console.',now);
+          db.prepare('INSERT INTO shipment_events (shipment_id,title,detail,created_at) VALUES (?,?,?,?)').run(id,input.initialStatus,operationsCreatedDetail,now);
           db.prepare('INSERT INTO admin_booking_requests (created_by,idempotency_key,request_payload,shipment_id) VALUES (?,?,?,?)').run(user.id,key,fingerprint,id);
           result=safeShipment(shipment(db.prepare('SELECT * FROM shipments WHERE id=?').get(id)));
         }
