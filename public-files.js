@@ -15,6 +15,7 @@ const files = new Map([
   ['css/operations.css', 'text/css; charset=utf-8'],
   ['js/app.js', 'text/javascript; charset=utf-8'],
   ['js/workspace.js', 'text/javascript; charset=utf-8'],
+  ['js/operations.js', 'text/javascript; charset=utf-8'],
   ['assets/swift-logistics-van.png', 'image/png'],
 ]);
 const routes = new Map(pages.map(name => [`/${name}`, `${name}.html`]));
